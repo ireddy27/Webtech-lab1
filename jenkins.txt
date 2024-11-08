@@ -1,0 +1,84 @@
+pipeline {
+    agent any
+    stages {
+        stage('Clone Repository') {
+            steps {
+                // Cloning the Git repository
+                checkout([$class: 'GitSCM', branches: [[name: '*/main']],
+                userRemoteConfigs: [[url: 'https://github.com/ireddy27/nodejs_devops.git']]
+                ])
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    // Build the Docker image
+                    sh 'docker build -t ireddy27/lab3:latest1 .'
+                }
+            }
+        }
+        stage('Login to Docker Hub') {
+            steps {
+                script {
+                    // Login to Docker Hub using Jenkins credentials
+                    withCredentials([usernamePassword(credentialsId: 'dockerHub', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                        sh "echo ${DOCKER_PASSWORD} | docker login -u ${DOCKER_USERNAME} --password-stdin"
+                    }
+                }
+            }
+        }
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    // Push the Docker image to Docker Hub
+                    sh 'docker push ireddy27/lab3:latest1'
+                }
+            }
+        }
+        stage('Deploy to Blue Environment') {
+            steps {
+                script {
+                    // Remove any existing blue container and run a new one
+                    sh 'docker rm -f blue || true'
+                    // Ensure the server listens on the correct port
+                    sh 'docker run -d --name blue -p 3001:3001 ireddy27/lab3:latest1'
+                }
+            }
+        }
+        stage('Test Blue Deployment') {
+            steps {
+                script {
+                    // Test if the blue deployment is working
+                    def response = sh(script: 'curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/status', returnStdout: true).trim()
+                    if (response != '200') {
+                        error("Blue deployment failed to respond with status code: ${response}")
+                    }
+                }
+            }
+        }
+        stage('Switch to Green Environment') {
+            steps {
+                script {
+                    // Remove any existing green container and run a new one
+                    sh 'docker rm -f green || true'
+                    // Ensure the server listens on the correct port
+                    sh 'docker run -d --name green -p 3002:3001 ireddy27/lab3:latest1'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                // Verify response from the green environment
+                def output = sh(script: "curl -s http://localhost:3002/status", returnStdout: true).trim()
+                if (output == '{"status":"API is running"}') {
+                    // Remove blue container if the green deployment is successful
+                    sh 'docker rm -f blue || true'
+                } else {
+                    error("Green deployment failed to respond correctly: ${output}")
+                }
+            }
+        }
+    }
+}
